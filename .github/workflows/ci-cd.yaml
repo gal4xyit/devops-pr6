@@ -1,0 +1,134 @@
+name: Python service CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devops-pr6-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci:
+    name: CI - tests and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare reports
+        run: mkdir -p reports
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements-dev.lock \
+            2>&1 | tee reports/install.log
+
+      - name: Run pytest
+        run: |
+          python -m pytest tests/unit -v --junitxml=reports/pytest.xml \
+            2>&1 | tee reports/pytest.log
+
+      - name: Build image
+        run: |
+          docker build --build-arg "APP_VERSION=$GITHUB_SHA" \
+            -t "devops-pr6:$GITHUB_SHA" . \
+            2>&1 | tee reports/build.log
+
+      - name: Export image for deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker save "devops-pr6:$GITHUB_SHA" | gzip > "$RUNNER_TEMP/image.tar.gz"
+
+      - name: Upload image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-${{ github.sha }}
+          path: ${{ runner.temp }}/image.tar.gz
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Upload CI reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          retention-days: 7
+
+  deploy:
+    name: CD - deploy and verify
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, pr6]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare deployment environment
+        run: |
+          mkdir -p reports
+          cp .env.example .env
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r requirements-dev.lock \
+            2>&1 | tee reports/install.log
+
+      - name: Download image
+        uses: actions/download-artifact@v8
+        with:
+          name: image-${{ github.sha }}
+          path: ${{ runner.temp }}/pr6-image-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Load image
+        run: |
+          docker load --input \
+            "$RUNNER_TEMP/pr6-image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/image.tar.gz" \
+            2>&1 | tee reports/image-load.log
+
+      - name: Deploy and verify
+        run: |
+          PYTHON_BIN="$GITHUB_WORKSPACE/.venv/bin/python" \
+            bash scripts/deploy.sh "devops-pr6:$GITHUB_SHA" \
+            2>&1 | tee reports/deploy.log
+
+      - name: Collect container diagnostics
+        if: always()
+        run: |
+          mkdir -p reports
+          docker compose -f compose.yaml ps -a \
+            > reports/containers.txt 2>&1 || true
+          docker compose -f compose.yaml logs --no-color --timestamps web \
+            > reports/container.log 2>&1 || true
+
+      - name: Upload deployment reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cd-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          retention-days: 7
