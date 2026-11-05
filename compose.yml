@@ -1,0 +1,35 @@
+name: devops-pr6
+
+services:
+  web:
+    image: "${IMAGE_NAME:-devops-pr6}:${IMAGE_TAG:-local}"
+
+    build:
+      context: .
+      args:
+        APP_VERSION: "${IMAGE_TAG:-local}"
+
+    environment:
+      APP_PORT: "${APP_PORT:-8000}"
+      GUNICORN_WORKERS: "${GUNICORN_WORKERS:-2}"
+
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8000}:${APP_PORT:-8000}"
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, os, urllib.request;
+          url = 'http://127.0.0.1:' + os.environ['APP_PORT'] + '/health';
+          response = urllib.request.urlopen(url, timeout=3);
+          data = json.load(response);
+          raise SystemExit(0 if response.status == 200 and data.get('status') == 'ok' else 1)
+      interval: 5s
+      timeout: 4s
+      retries: 5
+      start_period: 10s
+
+    restart: unless-stopped
