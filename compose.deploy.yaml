@@ -1,0 +1,3 @@
+services:
+  web:
+    image: "${DEPLOY_IMAGE:?Set DEPLOY_IMAGE}"
