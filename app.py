@@ -25,8 +25,6 @@ def create_app():
 
     @app.get("/health")
     def health():
-        if os.environ.get("FAIL_HEALTH", "0") == "1":
-            return {"status": "error", "reason": "intentional failure"}, 503
         return {"status": "ok"}, 200
 
     @app.get("/version")

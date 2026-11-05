@@ -24,8 +24,6 @@ RUN python -m pip install --no-cache-dir -r requirements.lock
 
 COPY app.py gunicorn.conf.py ./
 
-ENV FAIL_HEALTH=1
-
 USER appuser
 
 EXPOSE 8000
